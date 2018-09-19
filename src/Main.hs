@@ -2,15 +2,10 @@
 
 module Main where
 
-import qualified Control.Applicative as Applicative
-import qualified Crypto.KDF.Argon2 as A2
-import qualified Crypto.Error as CE
 import qualified Data.ByteString.Char8 as BS
-import Text.Printf (printf)
 import Data.Attoparsec.ByteString as Attoparsec
 import Data.Attoparsec.Binary
 import Data.Word
-import Debug.Trace (traceShowId, trace)
 
 main :: IO ()
 main = print =<< run
