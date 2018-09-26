@@ -10,8 +10,10 @@ module Data.KDBX.Header
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Serialize
-import Data.Version (Version, makeVersion)
+import Data.Version (Version, makeVersion, versionBranch)
 import Data.Word
+import Data.Foldable (traverse_)
+import Prelude hiding (min, all)
 
 data Header = Header
   { hVersion :: Version
@@ -28,9 +30,33 @@ data Header = Header
   } deriving (Show)
 
 instance Serialize Header where
-  put = fail "Not yet implemented"
+  put header = do
+    putWord32le $ fst signature
+    putWord32le $ snd signature
+    putVersion $ hVersion header
+    maybe (pure ()) (putField . (,) Comment) $ hComment header
+    traverse_ putField . map ($header) $
+      [ (,) CipherUUID . encode . hCipher
+      , (,) Compression . encode . hCompression
+      , (,) MasterSeed . hMasterSeed
+      , (,) TransformSeed . hTransformSeed
+      , (,) TransformRounds . encodeRounds . hTransformRounds
+      , (,) EncryptionIV . hEncryptionIV
+      , (,) StreamKey . hStreamKey
+      , (,) StartBytes . hStartBytes
+      , (,) StreamID . encode . hStreamID
+      ]
+    putField (EndOfHeader, "")
+    where
+      putLength = putWord16le . fromIntegral . BS.length
+      encodeRounds = runPut . putWord64le . fromIntegral
+      putField (field, data') = do
+        put field
+        putLength data'
+        putByteString data'
+
   get = do
-    label "Verifying Signature" verifySignature
+    _ <- label "Verifying Signature" verifySignature
     result <- makeHeader <$> getVersion <*> getFields
     either fail pure result
     where
@@ -62,12 +88,17 @@ data Cipher
   deriving (Show)
 
 instance Serialize Cipher where
-  put = fail "Not yet implemented"
+  put cipher = putByteString $
+    case cipher of
+      AES -> "\x31\xc1\xf2\xe6\xbf\x71\x43\x50\xbe\x58\x05\x21\x6a\xfc\x5a\xff"
+      ChaCha20 -> "\xd6\x03\x8a\x2b\x8b\x6f\x4c\xb5\xa5\x24\x33\x9a\x31\xdb\xb5\x9a" 
+
   get = do
     identifier <- isolate 16 (getByteString =<< remaining)
-    pure $ case identifier of
-      "\x31\xc1\xf2\xe6\xbf\x71\x43\x50\xbe\x58\x05\x21\x6a\xfc\x5a\xff" -> AES
-      "\xd6\x03\x8a\x2b\x8b\x6f\x4c\xb5\xa5\x24\x33\x9a\x31\xdb\xb5\x9a" -> ChaCha20
+    case identifier of
+      "\x31\xc1\xf2\xe6\xbf\x71\x43\x50\xbe\x58\x05\x21\x6a\xfc\x5a\xff" -> pure AES
+      "\xd6\x03\x8a\x2b\x8b\x6f\x4c\xb5\xa5\x24\x33\x9a\x31\xdb\xb5\x9a" -> pure ChaCha20
+      _ -> fail $ "Unknown Cipher with UUID: " <> show identifier
 
 data CompressionAlgorithm
   = None
@@ -75,7 +106,8 @@ data CompressionAlgorithm
   deriving (Show)
 
 instance Serialize CompressionAlgorithm where
-  put = fail "Not yet implemented"
+  put None = putWord32le 0
+  put GZip = putWord32le 1
   get = do
     identifier <- isolate 4 getWord32le
     case identifier of
@@ -90,7 +122,9 @@ data CrsAlgorithm
   deriving (Show)
 
 instance Serialize CrsAlgorithm where
-  put = fail "Not yet implemented"
+  put Arc4 = putWord32le 1
+  put Salsa20 = putWord32le 2
+  put ChaCha20'Crs = putWord32le 3
   get = do
     identifier <- isolate 4 getWord32le
     case identifier of
@@ -125,6 +159,13 @@ getVersion = do
   min <- fromIntegral <$> getWord16le
   maj <- fromIntegral <$> getWord16le
   pure $ makeVersion [maj, min]
+
+putVersion :: Putter Version
+putVersion v = do
+  putWord16le min
+  putWord16le maj
+  where
+    [maj, min] = map fromIntegral $ versionBranch v
 
 getFields :: Get [(HeaderField, ByteString)]
 getFields = getFields' []
